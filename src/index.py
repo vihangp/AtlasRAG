@@ -71,6 +71,7 @@ class DistributedIndex(object):
         ws = dist_utils.get_world_size()
         assert total_saved_shards % ws == 0, f"N workers must be a multiple of shards to save"
         shards_per_worker = total_saved_shards // ws
+        print("World Size: ", ws, " Rank: ", rank, "Shards per worker: ", shards_per_worker)
         n_embeddings = self.embeddings.shape[1]
         embeddings_per_shard = math.ceil(n_embeddings / shards_per_worker)
         assert n_embeddings == len(self.doc_map), len(self.doc_map)

@@ -283,6 +283,7 @@ class Atlas(nn.Module):
         with torch.no_grad():
             self.reader.eval()
             total_context = reader_ids.size(1)
+            # Use only 1 context, that is only one passage to calculate the perplexity
             cfg.n_context = 1
             cfg.bsz = bsz * total_context
             reader_ids_score = reader_ids.view(bsz * total_context, -1)
