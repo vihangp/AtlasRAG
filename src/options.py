@@ -321,7 +321,7 @@ class Options:
             "--task",
             type=str,
             default=None,
-            choices=["base", "mlm", "lm", "multiple_choice", "kilt", "section", "fever", "qa"],
+            choices=["base", "mlm", "lm", "multiple_choice", "kilt", "section", "fever", "qa", "qa_retrieved"],
             help="Task performed by the model. Used to setup preprocessing, retrieval filtering, evaluations, etc.",
         )
 
