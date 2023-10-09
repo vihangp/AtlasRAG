@@ -393,6 +393,13 @@ class Options:
             " Can improve results by de-biasing models's preferences for arbitrary answer orderings. Best results with 'all' but very slow. 'cyclic' is a good compromise. "
             "single: no permutations. cyclic: cyclic permutations. all: all possible answer order permutations'",
         )
+    
+    def add_credit_options(self):
+        self.parser.add_argument(
+            "--use_all_passages_only",
+            action="store_true",
+            help="Only use all passages and not other combinations of passages",
+        )
 
     def add_index_options(self):
         self.parser.add_argument(
@@ -471,4 +478,5 @@ def get_options():
     options.add_index_options()
     options.add_modeling_options()
     options.add_optim_options()
+    options.add_credit_options()
     return options

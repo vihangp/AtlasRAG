@@ -1,3 +1,12 @@
+
+
+# get the input_id embeddings using the encoder.ember_tokens layer
+# use torch.autograd.grad to compute the gradient of the loss with respect to the input_id embeddings
+# take the product of the embedding and the gradient
+# take the norm of the gradients
+# normalize the norms over all the tokens in the input_ids
+# sum the normalized norms over passages to get the final passage credit score
+
 import os
 import time
 from collections import defaultdict
@@ -43,6 +52,8 @@ def evaluate(model, opt, data_path, step=None):
     data_iterator = _get_eval_data_iterator(opt, data_path, task)
 
     for i, batch in enumerate(data_iterator):
+        unwrapped_model.reader.zero_grad()
+
         query = batch.get("query", [""])
         answers = batch.get("target", [""])
         nn_scores = batch.get("nn_scores")
@@ -64,14 +75,52 @@ def evaluate(model, opt, data_path, step=None):
         # generate closed book solution
         # get tokens for the query only
         reader_tokens, _ = unwrapped_model.tokenize_passages(query, retrieved_passages)
-        
+        max_length = max([len(p) for p in retrieved_passages])
+
+        # reader_tokens: input_ids, attention_mask (batch_size, some_number, 512)
+        # some_number = the max number of passages retrieved for any example in the batch
+        # 2  - adds extra vectors with zero values
+        # 4  - adds extra vectors with zero values
+
         if "eval_loss" in task.metrics:
             eval_loss, logits = unwrapped_model.compute_reader_loss_and_logits(reader_tokens, decoder_input_ids, labels)
             metrics["eval_loss"].append(eval_loss)
-
+        
         generation = unwrapped_model.generate(
             reader_tokens, query, choices=batch["choices"] if "choices" in batch else None
         )
+
+        # copied from atlas generate function
+
+        with torch.enable_grad():
+
+            unwrapped_model.reader.gradient_checkpointing_enable()
+            cfg = unwrapped_model.reader.encoder.config
+            cfg.bsz = reader_tokens["input_ids"].size(0)
+            cfg.n_context = min(opt.n_context, reader_tokens["input_ids"].size(1))
+
+            output = unwrapped_model.reader(
+                input_ids=reader_tokens["input_ids"].cuda().view(reader_tokens["input_ids"].size(0), -1),
+                attention_mask=reader_tokens["attention_mask"].cuda().view(reader_tokens["attention_mask"].size(0), -1),
+                decoder_input_ids=decoder_input_ids.cuda(),
+                use_cache=False,
+                output_hidden_states = True
+                )
+
+            hidden_states = output['encoder_hidden_states']
+            logits = output['logits']
+            embedding_states = hidden_states[0]
+
+            gradients = torch.autograd.grad(outputs=logits, inputs=embedding_states, grad_outputs=torch.ones_like(logits))[0]
+
+            with torch.no_grad():
+                credit_raw = torch.mul(gradients, embedding_states)
+                # norm of the gradient
+                credit_norm = torch.norm(credit_raw, dim=-1)                
+                credit_norm = credit_norm.view(reader_tokens["input_ids"].size(0),reader_tokens["input_ids"].size(1), -1)
+                credit_sum_passages = torch.sum(credit_norm, dim=-1)
+                credit_sum_passages_normlz = credit_sum_passages / torch.sum(credit_sum_passages, dim=-1).unsqueeze(-1)
+                credit_sum_passages_normlz = credit_sum_passages_normlz.detach().cpu().numpy()
 
         for k, g in enumerate(generation):
             if opt.decoder_prompt_format is not None:
@@ -86,7 +135,7 @@ def evaluate(model, opt, data_path, step=None):
                 metrics[key].append(value)
             
             if opt.write_results:
-                ex = {"query": query[k], "answers": gold, "generation": pred, "scores": sample_metrics, "nn_scores": nn_scores[k]}
+                ex = {"query": query[k], "answers": gold, "generation": pred, "scores": sample_metrics, "nn_scores": nn_scores[k], "gradient_credit": credit_sum_passages_normlz[k].tolist()}
                 if not opt.dont_write_passages:
                     ex["passages"] = retrieved_passages[k]
                 if batch_metadata is not None:
@@ -127,12 +176,13 @@ if __name__ == "__main__":
 
     logger.info("Start Evaluation")
     dist_utils.barrier()
-
     for data_path in opt.eval_data:
         dataset_name = os.path.basename(data_path)
         logger.info(f"Start Evaluation on {data_path}")
 
         metrics = evaluate(model, opt, data_path, step)
+
+
 
 
 

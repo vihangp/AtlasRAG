@@ -73,35 +73,11 @@ def run_retrieval_only(model, index, opt, data_path, step=None):
             dataset_wpred.append(ex)
             num_queries_added += 1
 
-            # create a separate entry for each passage
-            for p in range(len(retrieved_passages[k])):
-                current_retrieved_passages = [retrieved_passages[k][p]]
-                nn_scores = [sim_scores[k][p]]
-                ex = {"query": query[k], "answers": gold, "passages": current_retrieved_passages, "nn_scores": nn_scores}
-                if batch_metadata is not None:
-                    ex["metadata"] = batch_metadata[k]
-                if "id" in batch:
-                    ex["id"] = batch["id"][k]
-                dataset_wpred.append(ex)
-                num_queries_added += 1
-            
-            # drop one passage at a time
-            for p in range(len(retrieved_passages[k])):
-                current_retrieved_passages = [s for ind, s in enumerate(retrieved_passages[k]) if ind!=p]
-                nn_scores = [s for ind, s in enumerate(sim_scores[k]) if ind!=p]
-                ex = {"query": query[k], "answers": gold, "passages": current_retrieved_passages, "nn_scores": nn_scores}
-                if batch_metadata is not None:
-                    ex["metadata"] = batch_metadata[k]
-                if "id" in batch:
-                    ex["id"] = batch["id"][k]
-                dataset_wpred.append(ex)
-                num_queries_added += 1
-
-            # drop two passages at a time
-            for p in range(len(retrieved_passages[k])):
-                for q in range(p+1, len(retrieved_passages[k])):
-                    current_retrieved_passages = [s for ind, s in enumerate(retrieved_passages[k]) if ind!=p and ind!=q]
-                    nn_scores = [s for ind, s in enumerate(sim_scores[k]) if ind!=p and ind!=q]
+            if opt.use_all_passages_only:
+                # create a separate entry for each passage
+                for p in range(len(retrieved_passages[k])):
+                    current_retrieved_passages = [retrieved_passages[k][p]]
+                    nn_scores = [sim_scores[k][p]]
                     ex = {"query": query[k], "answers": gold, "passages": current_retrieved_passages, "nn_scores": nn_scores}
                     if batch_metadata is not None:
                         ex["metadata"] = batch_metadata[k]
@@ -109,13 +85,24 @@ def run_retrieval_only(model, index, opt, data_path, step=None):
                         ex["id"] = batch["id"][k]
                     dataset_wpred.append(ex)
                     num_queries_added += 1
-            
-            # drop three passages at a time
-            for p in range(len(retrieved_passages[k])):
-                for q in range(p+1, len(retrieved_passages[k])):
-                    for r in range(q+1, len(retrieved_passages[k])):
-                        current_retrieved_passages = [s for ind, s in enumerate(retrieved_passages[k]) if ind!=p and ind!=q and ind!=r]
-                        nn_scores = [s for ind, s in enumerate(sim_scores[k]) if ind!=p and ind!=q and ind!=r]
+                
+                # drop one passage at a time
+                for p in range(len(retrieved_passages[k])):
+                    current_retrieved_passages = [s for ind, s in enumerate(retrieved_passages[k]) if ind!=p]
+                    nn_scores = [s for ind, s in enumerate(sim_scores[k]) if ind!=p]
+                    ex = {"query": query[k], "answers": gold, "passages": current_retrieved_passages, "nn_scores": nn_scores}
+                    if batch_metadata is not None:
+                        ex["metadata"] = batch_metadata[k]
+                    if "id" in batch:
+                        ex["id"] = batch["id"][k]
+                    dataset_wpred.append(ex)
+                    num_queries_added += 1
+
+                # drop two passages at a time
+                for p in range(len(retrieved_passages[k])):
+                    for q in range(p+1, len(retrieved_passages[k])):
+                        current_retrieved_passages = [s for ind, s in enumerate(retrieved_passages[k]) if ind!=p and ind!=q]
+                        nn_scores = [s for ind, s in enumerate(sim_scores[k]) if ind!=p and ind!=q]
                         ex = {"query": query[k], "answers": gold, "passages": current_retrieved_passages, "nn_scores": nn_scores}
                         if batch_metadata is not None:
                             ex["metadata"] = batch_metadata[k]
@@ -123,6 +110,20 @@ def run_retrieval_only(model, index, opt, data_path, step=None):
                             ex["id"] = batch["id"][k]
                         dataset_wpred.append(ex)
                         num_queries_added += 1
+                
+                # drop three passages at a time
+                for p in range(len(retrieved_passages[k])):
+                    for q in range(p+1, len(retrieved_passages[k])):
+                        for r in range(q+1, len(retrieved_passages[k])):
+                            current_retrieved_passages = [s for ind, s in enumerate(retrieved_passages[k]) if ind!=p and ind!=q and ind!=r]
+                            nn_scores = [s for ind, s in enumerate(sim_scores[k]) if ind!=p and ind!=q and ind!=r]
+                            ex = {"query": query[k], "answers": gold, "passages": current_retrieved_passages, "nn_scores": nn_scores}
+                            if batch_metadata is not None:
+                                ex["metadata"] = batch_metadata[k]
+                            if "id" in batch:
+                                ex["id"] = batch["id"][k]
+                            dataset_wpred.append(ex)
+                            num_queries_added += 1
             
 
     if opt.write_results:

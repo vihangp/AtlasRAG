@@ -123,6 +123,7 @@ def input_reduction(data):
             inclusion_exact_match = inclusion_exact_match / (len(data[i]['scores']) - 2)
             inclusion_f1 = inclusion_f1 / (len(data[i]['scores']) - 2)
 
+            # credit = average_score_when_included - score_when_dropped
             passage_credit_em = inclusion_exact_match -  passage_exact_match + 1e-8
             passage_credit_f1 = inclusion_f1 - passage_f1 + 1e-8
             
@@ -146,7 +147,67 @@ def input_reduction(data):
             sum_f1_scores += data[i]['scores'][j]['passage_credit_f1'] + 1e-8
         
         # sum of passage credit should be 1
-        for j in range(len(data[i]['scores'])):
+        for j in range(1, len(data[i]['scores'])):
+            data[i]['scores'][j]['passage_credit_em'] = data[i]['scores'][j]['passage_credit_em'] / sum_em_scores
+            data[i]['scores'][j]['passage_credit_f1'] = data[i]['scores'][j]['passage_credit_f1'] / sum_f1_scores
+
+    return data
+
+def gradient(data):
+    """
+    Credit is given by norm of the product of the input and the gradient of the output wrt input. Further, normalized to sum to 1. 
+    """
+    for i in range(len(data)):
+        # 0th index is the closed book score
+        closed_book_exact_match = data[i]['scores'][0]['exact_match']
+        closed_book_f1 = data[i]['scores'][0]['f1']
+
+        data[i]['scores'][0]['passage_credit_em'] = closed_book_exact_match  
+        data[i]['scores'][0]['passage_credit_f1'] = closed_book_f1
+
+        all_passage_credit_em = []
+        all_passage_credit_f1 = []
+
+        for j in range(1, len(data[i]['scores'])):
+            # compare the closed book score with top k passage scores
+            passage_exact_match = data[i]['scores'][j]['exact_match']
+            passage_f1 = data[i]['scores'][j]['f1']
+
+            inclusion_exact_match = 0
+            inclusion_f1 = 0
+            for k in range(1, len(data[i]['scores'])):
+                if k != j:
+                    inclusion_exact_match += data[i]['scores'][k]['exact_match']
+                    inclusion_f1 += data[i]['scores'][k]['f1']
+
+            inclusion_exact_match = inclusion_exact_match / (len(data[i]['scores']) - 2)
+            inclusion_f1 = inclusion_f1 / (len(data[i]['scores']) - 2)
+
+            # credit = average_score_when_included - score_when_dropped
+            passage_credit_em = inclusion_exact_match -  passage_exact_match + 1e-8
+            passage_credit_f1 = inclusion_f1 - passage_f1 + 1e-8
+            
+            data[i]['scores'][j]['passage_credit_em'] = passage_credit_em  
+            data[i]['scores'][j]['passage_credit_f1'] = passage_credit_f1 
+
+            all_passage_credit_em.append(data[i]['scores'][j]['passage_credit_em'])
+            all_passage_credit_f1.append(data[i]['scores'][j]['passage_credit_f1'])
+
+        # make values >= 0
+        min_passage_credit_em = min(all_passage_credit_em) 
+        min_passage_credit_f1 = min(all_passage_credit_f1)
+
+        sum_em_scores = 0
+        sum_f1_scores = 0
+        for j in range(1, len(data[i]['scores'])):
+            data[i]['scores'][j]['passage_credit_em'] = data[i]['scores'][j]['passage_credit_em'] - min_passage_credit_em
+            data[i]['scores'][j]['passage_credit_f1'] = data[i]['scores'][j]['passage_credit_f1'] - min_passage_credit_f1
+
+            sum_em_scores += data[i]['scores'][j]['passage_credit_em'] + 1e-8
+            sum_f1_scores += data[i]['scores'][j]['passage_credit_f1'] + 1e-8
+        
+        # sum of passage credit should be 1
+        for j in range(1, len(data[i]['scores'])):
             data[i]['scores'][j]['passage_credit_em'] = data[i]['scores'][j]['passage_credit_em'] / sum_em_scores
             data[i]['scores'][j]['passage_credit_f1'] = data[i]['scores'][j]['passage_credit_f1'] / sum_f1_scores
 
@@ -166,6 +227,8 @@ def get_credit_from_path(data_dir, data_file, dataset_name="nq_data", model_name
         data = advantage(data)
     elif type == "input_reduction":
         data = input_reduction(data)
+    elif type == "gradient":
+        data = gradient(data)
 
     if type == "credit":
         # sum passage credits across all queries, for each index in top k
@@ -269,6 +332,10 @@ if __name__ == "__main__":
         datafile = "nq_test-step-0.jsonl"
         get_credit_from_path(data_dir, datafile, "nq_data_test", "base_ft", type="input_reduction")
 
+        data_dir = "/data/projects/monet/atlas/experiments/base_t5_model_lm_TRUE_drop/"
+        datafile = "triviaqa_test-step-0.jsonl"
+        get_credit_from_path(data_dir, datafile, "trvia_data_test", "base_ft", type="input_reduction")
+
         data_dir = "/data/projects/monet/atlas/experiments/large_t5_model_lm_TRUE_drop/"
         datafile = "nq_dev-step-0.jsonl"
         get_credit_from_path(data_dir, datafile, "nq_data_dev", "large_ft", type="input_reduction")
@@ -276,3 +343,12 @@ if __name__ == "__main__":
         data_dir = "/data/projects/monet/atlas/experiments/large_t5_model_lm_TRUE_drop/"
         datafile = "nq_test-step-0.jsonl"    
         get_credit_from_path(data_dir, datafile, "nq_data_test", "large_ft", type="input_reduction")
+
+        data_dir = "/data/projects/monet/atlas/experiments/large_t5_model_lm_TRUE_drop/"
+        datafile = "triviaqa_test-step-0.jsonl"
+        get_credit_from_path(data_dir, datafile, "trvia_data_test", "large_ft", type="input_reduction")
+
+    elif type == "gradient":
+
+        print("\n Gradient: \n")
+

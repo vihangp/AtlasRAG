@@ -574,6 +574,19 @@ class Atlas(nn.Module):
         loss = -1 * torch.sum(logsumprobs * mask_labels) / torch.sum(mask_labels)
 
         return loss
+    
+    def compute_reader_logits(self, tokens, decoder_input_ids):
+        cfg = self.reader.encoder.config
+        cfg.bsz = tokens["input_ids"].size(0)
+        cfg.n_context = min(self.opt.n_context, tokens["input_ids"].size(1))
+
+        output = self.reader(
+            input_ids=tokens["input_ids"].cuda().view(tokens["input_ids"].size(0), -1),
+            attention_mask=tokens["attention_mask"].cuda().view(tokens["attention_mask"].size(0), -1),
+            decoder_input_ids=decoder_input_ids.cuda(),
+            use_cache=False,
+        )
+        return output
 
     @torch.no_grad()
     def compute_reader_loss_and_logits(self, tokens, decoder_input_ids, labels):
@@ -618,7 +631,7 @@ class Atlas(nn.Module):
         )
 
         return outputs
-
+    
     def get_prefix_allowed_tokens_fn(self, prefix_str: Optional[str] = None):
         if prefix_str:
             prefix_tokens_ids = self.reader_tokenizer.batch_encode_plus(prefix_str, add_special_tokens=False)[
