@@ -1,12 +1,3 @@
-
-
-# get the input_id embeddings using the encoder.ember_tokens layer
-# use torch.autograd.grad to compute the gradient of the loss with respect to the input_id embeddings
-# take the product of the embedding and the gradient
-# take the norm of the gradients
-# normalize the norms over all the tokens in the input_ids
-# sum the normalized norms over passages to get the final passage credit score
-
 import os
 import time
 from collections import defaultdict
@@ -21,6 +12,7 @@ from src.index_io import load_or_initialize_index, save_embeddings_and_index
 from src.model_io import create_checkpoint_directories, load_or_initialize_atlas_model
 from src.options import get_options
 from src.tasks import get_task
+from src.atlas import select_crossattention_scores
 
 os.environ["TOKENIZERS_PARALLELISM"] = "true"
 
@@ -50,15 +42,27 @@ def evaluate(model, opt, data_path, step=None):
 
     task = get_task(opt, reader_tokenizer)
     data_iterator = _get_eval_data_iterator(opt, data_path, task)
-
+    
     for i, batch in enumerate(data_iterator):
-        unwrapped_model.reader.zero_grad()
-
         query = batch.get("query", [""])
         answers = batch.get("target", [""])
         nn_scores = batch.get("nn_scores")
         batch_metadata = batch.get("metadata")
         target_tokens = batch.get("target_tokens")
+
+        query_mask_reader = (
+            unwrapped_model.reader_tokenizer.batch_encode_plus(
+                query,
+                max_length=opt.text_maxlength,
+                padding="longest",
+                truncation=True,
+                return_tensors="pt",
+                add_special_tokens=False,
+            )["attention_mask"]
+            .bool()
+            .cuda()
+        )
+
         query_enc, labels, decoder_input_ids = unwrapped_model.tokenize(query, answers, target_tokens=target_tokens)
 
         assert "passages" in batch, "cant use use_file_passages mode without passing in passages"
@@ -68,48 +72,53 @@ def evaluate(model, opt, data_path, step=None):
         if (len(query) == 0) or (len(query[0]) == 0):
             continue
 
+        all_predictions = [[] for _ in retrieved_passages]
+        all_answers = [[] for _ in retrieved_passages]
+        all_metrics = [[] for _ in retrieved_passages]
+
         # generate closed book solution
         # get tokens for the query only
         reader_tokens, _ = unwrapped_model.tokenize_passages(query, retrieved_passages)
-        max_length = max([len(p) for p in retrieved_passages])
-
-        # reader_tokens: input_ids, attention_mask (batch_size, some_number, 512)
-        # some_number = the max number of passages retrieved for any example in the batch
-        # 2  - adds extra vectors with zero values
-        # 4  - adds extra vectors with zero values
-
+        
         if "eval_loss" in task.metrics:
             eval_loss, logits = unwrapped_model.compute_reader_loss_and_logits(reader_tokens, decoder_input_ids, labels)
             metrics["eval_loss"].append(eval_loss)
-        
+
         generation = unwrapped_model.generate(
             reader_tokens, query, choices=batch["choices"] if "choices" in batch else None
         )
 
-        # copied from atlas generate function
-
+        unwrapped_model.reader.eval()
+        unwrapped_model.reader.reset_score_storage()
         cfg = unwrapped_model.reader.encoder.config
-        cfg.bsz = reader_tokens["input_ids"].size(0)
-        cfg.n_context = min(opt.n_context, reader_tokens["input_ids"].size(1))
-
-        output = unwrapped_model.reader(
-            input_ids=reader_tokens["input_ids"].cuda().view(reader_tokens["input_ids"].size(0), -1),
-            attention_mask=reader_tokens["attention_mask"].cuda().view(reader_tokens["attention_mask"].size(0), -1),
-            decoder_input_ids=decoder_input_ids.cuda(),
-            use_cache=False,
-            output_hidden_states = True
+        reader_ids = reader_tokens["input_ids"]
+        reader_mask = reader_tokens["attention_mask"].bool()
+        cfg.bsz = reader_ids.size(0)
+        cfg.n_context = reader_ids.size(1)
+        reader_ids_score = reader_ids.view(reader_ids.size(0), -1)
+        reader_mask_score = reader_mask.view(reader_mask.size(0), -1)
+        with torch.no_grad():
+            reader_output = unwrapped_model.reader(
+                input_ids=reader_ids_score,
+                attention_mask=reader_mask_score,
+                decoder_input_ids=decoder_input_ids,
+                labels=labels,
+                use_cache=False,
+            )
+            crossattention_scores = unwrapped_model.reader.get_crossattention_scores(
+                cfg.n_context,
+                reader_mask_score,
+                labels=labels,
+                ids=reader_ids,
+                mode=opt.gold_score_mode,
+                mask_query=query_mask_reader,
             )
 
-        encoder_output = output['encoder_last_hidden_state']
-        decoder_output = output['decoder_hidden_states']
-        decoder_last_hidden_state = decoder_output[0]
+            cross_credit = crossattention_scores['normstop5']
+            credit_sum_passages = torch.sum(cross_credit, dim=1)
+            cross_credit_normlz = cross_credit / credit_sum_passages.unsqueeze(-1)
+            cross_credit_normlz = cross_credit_normlz.cpu().numpy().tolist()
 
-        # 6, 2560, 768 : will be used as keys and values in the cross attention
-        print(encoder_output.shape)
-        # 6, 16, 768 [-1]
-        print(decoder_last_hidden_state.shape, decoder_input_ids.shape)
-
-        logits = output['logits']
 
         for k, g in enumerate(generation):
             if opt.decoder_prompt_format is not None:
@@ -124,7 +133,7 @@ def evaluate(model, opt, data_path, step=None):
                 metrics[key].append(value)
             
             if opt.write_results:
-                ex = {"query": query[k], "answers": gold, "generation": pred, "scores": sample_metrics, "nn_scores": nn_scores[k]}
+                ex = {"query": query[k], "answers": gold, "generation": pred, "scores": sample_metrics, "nn_scores": nn_scores[k], 'attention_credit': cross_credit_normlz[k]}
                 if not opt.dont_write_passages:
                     ex["passages"] = retrieved_passages[k]
                 if batch_metadata is not None:
@@ -165,13 +174,12 @@ if __name__ == "__main__":
 
     logger.info("Start Evaluation")
     dist_utils.barrier()
+
     for data_path in opt.eval_data:
         dataset_name = os.path.basename(data_path)
         logger.info(f"Start Evaluation on {data_path}")
 
         metrics = evaluate(model, opt, data_path, step)
-
-
 
 
 

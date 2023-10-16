@@ -221,6 +221,30 @@ def compute_grad_stats(model):
         res["mean"] = stats.mean(0)[2].item()
         return res
 
+def compute_grad_stats_finetune_head(model):
+    with torch.no_grad():
+        stats = []
+        for name, p in model.named_parameters():
+            if p.grad is not None:
+                s1 = torch.min(torch.abs(p.grad)).item()
+                s2 = torch.max(torch.abs(p.grad)).item()
+                s3 = torch.mean(torch.abs(p.grad)).item()
+                s4 = torch.linalg.norm(p.grad).item()
+                stats += [s1, s2, s3, s4]
+            else:
+                stats += [0.0, 0.0, 0.0, 0.0]
+        stats = torch.Tensor(stats).cuda()
+        if torch.distributed.is_initialized():
+            torch.distributed.all_reduce(stats)
+        stats = stats.view(-1, 4)
+
+        res = {}
+        res["skip_example"] = (torch.any(torch.isinf(stats)) or torch.any(torch.isnan(stats))).item()
+        res["min"] = stats.min(0)[0][0].item()
+        res["max"] = stats.max(0)[0][1].item()
+        res["mean"] = stats.mean(0)[2].item()
+        return res
+
 
 def write_output(glob_path, output_path):
     files = list(glob_path.glob("*.txt"))

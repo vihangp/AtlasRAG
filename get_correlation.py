@@ -266,65 +266,101 @@ def get_credit_from_path(data_dir, data_file, dataset_name="nq_data", model_name
         print(dataset_name, model_name, "Average credit em for each index in top k:", np.array(all_em_scores_sum_k)/ len(data))
         print(dataset_name, model_name, "Average credit f1 for each index in top k:", np.array(all_f1_scores_sum_k)/ len(data))
 
-    # save the data
-    with open(data_dir + data_file.split(".")[0] + "_" + type + ".jsonl", "w") as f:
-        for line in data:
-            json.dump(line, f, ensure_ascii=False)
-            f.write("\n")
 
 
 if __name__ == "__main__":
     type = "input_reduction"
-    if type == "credit":
-        data_dir = "/data/projects/monet/atlas/experiments/base_t5_model_lm_TRUE/"
-        datafile = "nq_dev-step-0.jsonl"
-        get_credit_from_path(data_dir, datafile, "nq_data_dev", "base_ft", type="credit")
 
-        data_dir = "/data/projects/monet/atlas/experiments/base_t5_model_lm_TRUE/"
-        datafile = "nq_test-step-0.jsonl"
-        get_credit_from_path(data_dir, datafile, "nq_data_test", "base_ft", type="credit")
+    credit_file_loo = "/data/projects/monet/atlas/experiments/base_t5_model_lm_TRUE_leave_one_out/nq_test-step-0_input_reduction.jsonl"
+    credit_file_gradient = "/data/projects/monet/atlas/experiments/base_t5_model_lm_TRUE_gradient_credit/nq_test-step-0-step-0-eval.jsonl"
+    credit_file_attention = "/data/projects/monet/atlas/experiments/base_t5_model_lm_TRUE_attention_credit/nq_test-step-0-step-0-eval.jsonl"
 
-        data_dir = "/data/projects/monet/atlas/experiments/base_t5_model_lm_TRUE/"
-        datafile = "triviaqa_dev-step-0.jsonl"
-        get_credit_from_path(data_dir, datafile, "trivia_data_dev", "base_ft, type=credit")
-
-        data_dir = "/data/projects/monet/atlas/experiments/base_t5_model_lm_TRUE/"
-        datafile = "triviaqa_test-step-0.jsonl"
-        get_credit_from_path(data_dir, datafile, "trivia_data_test", "base_ft", type="credit")
-
-        data_dir = "/data/projects/monet/atlas/experiments/large_t5_model_lm_TRUE/"
-        datafile = "nq_dev-step-0.jsonl"
-        get_credit_from_path(data_dir, datafile, "nq_data_dev", "large_ft", type="credit")
-
-        data_dir = "/data/projects/monet/atlas/experiments/large_t5_model_lm_TRUE/"
-        datafile = "nq_test-step-0.jsonl"    
-        get_credit_from_path(data_dir, datafile, "nq_data_test", "large_ft", type="credit")
-
-        data_dir = "/data/projects/monet/atlas/experiments/large_t5_model_lm_TRUE/"
-        datafile = "triviaqa_dev-step-0.jsonl"
-        get_credit_from_path(data_dir, datafile, "trivia_data_dev", "large_ft", type="credit")
-
-        data_dir = "/data/projects/monet/atlas/experiments/large_t5_model_lm_TRUE/"
-        datafile = "triviaqa_test-step-0.jsonl"
-        get_credit_from_path(data_dir, datafile, "trivia_data_test", "large_ft", type="credit")
-
-        data_dir = "/data/projects/monet/atlas/experiments/xl_t5_model_lm_TRUE/"
-        datafile = "nq_dev-step-0.jsonl"
-        get_credit_from_path(data_dir, datafile, "nq_data_dev", "xl_ft", type="credit")
-
-        data_dir = "/data/projects/monet/atlas/experiments/xl_t5_model_lm_TRUE/"
-        datafile = "nq_test-step-0.jsonl"
-        get_credit_from_path(data_dir, datafile, "nq_data_test", "xl_ft", type="credit")
-
-        data_dir = "/data/projects/monet/atlas/experiments/xl_t5_model_lm_TRUE/"
-        datafile = "triviaqa_test-step-0.jsonl"
-        get_credit_from_path(data_dir, datafile, "trivia_data_test", "xl_ft", type="credit")
-
-    elif type == "input_reduction":
+    with open(credit_file_loo, "r") as f:
+        data_loo = f.readlines()
     
-        print("\n Input reduction: \n")
+    data_loo = [json.loads(line) for line in data_loo]
 
-        data_dir = "/data/projects/monet/atlas/experiments/base_t5_model_lm_TRUE_leave_one_out/"
-        datafile = "nq_test-step-0.jsonl"
-        get_credit_from_path(data_dir, datafile, "nq_data_test", "base_ft", type="input_reduction")
+    with open(credit_file_gradient, "r") as f:
+        data_gradient = f.readlines()
+    
+    data_gradient = [json.loads(line) for line in data_gradient]
+    
+    with open(credit_file_attention, "r") as f:
+        data_attention = f.readlines()
+    
+    data_attention = [json.loads(line) for line in data_attention]
+
+    all_em_scores_sum_k = [[] for i in range(1, len(data_loo[0]['scores']))]
+    all_f1_scores_sum_k = [[] for i in range(1, len(data_loo[0]['scores']))]
+
+    loo_dict = {}
+    for i in range(len(data_loo)):
+        loo_dict[data_loo[i]['query']] = []
+        for j in range(1, len(data_loo[i]['scores'])):
+            loo_dict[data_loo[i]['query']].append(data_loo[i]['scores'][j]['passage_credit_f1'])
+
+    gradient_dict = {}
+    for i in range(len(data_gradient)):
+        for j in range(1, len(data_gradient[i]['scores'])):
+            gradient_dict[data_gradient[i]['query']] = data_gradient[i]['gradient_credit']
+    
+    gradient_dict = {}
+    for i in range(len(data_attention)):
+        gradient_dict[data_attention[i]['query']] = []
+        for j in range(1, len(data_attention[i]['scores'])):
+            gradient_dict[data_attention[i]['query']] = data_attention[i]['attention_credit']
+
+
+    doc = 0
+    all_loo_numbers_0 = []
+    all_gradient_numbers_0 = []
+    
+    all_loo_numbers_1 = []
+    all_gradient_numbers_1 = []
+
+    all_loo_numbers_2 = []
+    all_gradient_numbers_2 = []
+
+    all_loo_numbers_3 = []
+    all_gradient_numbers_3 = []
+
+    all_loo_numbers_4 = []
+    all_gradient_numbers_4 = []
+
+    all_loo_numbers_5 = []
+    all_gradient_numbers_5 = []
+
+    for key in gradient_dict.keys():
+
+        all_loo_numbers_0.append(loo_dict[key][0])
+        all_gradient_numbers_0.append(gradient_dict[key][0])
+
+        all_loo_numbers_1.append(loo_dict[key][1])
+        all_gradient_numbers_1.append(gradient_dict[key][1])
+
+        all_loo_numbers_2.append(loo_dict[key][2])
+        all_gradient_numbers_2.append(gradient_dict[key][2])
+
+        all_loo_numbers_3.append(loo_dict[key][3])
+        all_gradient_numbers_3.append(gradient_dict[key][3])
+
+        all_loo_numbers_4.append(loo_dict[key][4])
+        all_gradient_numbers_4.append(gradient_dict[key][4])
+
+
+
+
+    # correlation between two list
+    from scipy.stats import pearsonr
+    print("Correlation between loo and gradient for index 0:", pearsonr(all_loo_numbers_0, all_gradient_numbers_0))
+    print("Correlation between loo and gradient for index 1:", pearsonr(all_loo_numbers_1, all_gradient_numbers_1))
+    print("Correlation between loo and gradient for index 2:", pearsonr(all_loo_numbers_2, all_gradient_numbers_2))
+    print("Correlation between loo and gradient for index 3:", pearsonr(all_loo_numbers_3, all_gradient_numbers_3))
+    print("Correlation between loo and gradient for index 4:", pearsonr(all_loo_numbers_4, all_gradient_numbers_4))
+
+
+    
+
+
+    
 

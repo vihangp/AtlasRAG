@@ -161,6 +161,7 @@ def evaluate(model, index, opt, data_path, step=None):
             all_metrics[k].append(sample_metrics)
 
         # generate open book solutions
+        # drops each passage one at a time
         for current_context in range(opt.n_context):
             current_retrieved_passages = [[p for ind, p in enumerate(passages) if ind!=current_context] for passages in retrieved_passages]
 
@@ -190,11 +191,47 @@ def evaluate(model, index, opt, data_path, step=None):
                 all_predictions[k].append(pred)
                 all_answers[k].append(gold)
                 all_metrics[k].append(sample_metrics)
+
+        all_predictions_one = [[] for _ in retrieved_passages]
+        all_answers_one = [[] for _ in retrieved_passages]
+        all_metrics_one = [[] for _ in retrieved_passages]
+
+        # keep one passage at a time
+        for current_context in range(opt.n_context):
+            current_retrieved_passages = [[passages[current_context]] for passages in retrieved_passages]
+
+            # this function converts the passages to tokens, which can then be given to a LLM for generation
+            reader_tokens, _ = unwrapped_model.tokenize_passages(query, current_retrieved_passages)
+
+            if "eval_loss" in task.metrics:
+                eval_loss, logits = unwrapped_model.compute_reader_loss_and_logits(reader_tokens, decoder_input_ids, labels)
+                metrics["eval_loss"].append(eval_loss)
+
+            generation = unwrapped_model.generate(
+                reader_tokens, query, choices=batch["choices"] if "choices" in batch else None
+            )
+
+            for k, g in enumerate(generation):
+                if opt.decoder_prompt_format is not None:
+                    query_ids = reader_tokenizer.encode(
+                        opt.decoder_prompt_format.format_map({"query": query[k]}), add_special_tokens=False
+                    )
+                    g = g[len(query_ids) + 1 :]
+                pred = reader_tokenizer.decode(g, skip_special_tokens=True)
+                gold = [answers[k]] if not "answers" in batch else batch["answers"][k]
+                sample_metrics = task.evaluation(pred, gold)
+
+                for key, value in sample_metrics.items():
+                    metrics[key].append(value)
+                all_predictions_one[k].append(pred)
+                all_answers_one[k].append(gold)
+                all_metrics_one[k].append(sample_metrics)
+
         
         if opt.write_results:
             # this is looping over the batch
             for k in range(len(retrieved_passages)):
-                ex = {"query": query[k], "answers": all_answers[k], "generation": all_predictions[k], "scores": all_metrics[k], "nn_scores": sim_scores[k]}
+                ex = {"query": query[k], "answers": all_answers[k], "generation": all_predictions[k], "scores": all_metrics[k], "nn_scores": sim_scores[k], "generation_one": all_predictions_one[k], "scores_one": all_metrics_one[k]}
                 if not opt.dont_write_passages:
                     ex["passages"] = retrieved_passages[k]
                 if batch_metadata is not None:
