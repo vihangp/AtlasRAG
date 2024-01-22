@@ -23,7 +23,6 @@ import torch.distributed as dist
 from src.tasks import get_task
 from torch.nn import MultiheadAttention, Linear
 from src.util import WarmupLinearScheduler, CosineScheduler, FixedScheduler
-from sklearn.metrics import confusion_matrix
 
 
 os.environ["TOKENIZERS_PARALLELISM"] = "true"
@@ -37,7 +36,7 @@ EPSILON: str = "0.01"
 SMALL_EPSILON: str = "4e-4"
 DROPOUT: str = "0.1"
 WARMUP_STEPS: str = "5"
-EVAL_FREQ: str = "50"
+EVAL_FREQ: str = "10"
 LOG_FREQ: str = "5"
 NO_REFRESH: str = "-1"
 CHECK_FREQS: List[str] = ["--warmup_steps", "--save_freq", "--eval_freq"]
@@ -77,189 +76,6 @@ def set_optim(opt, model):
 
     return optimizer, scheduler, retr_optimizer, retr_scheduler
 
-class LCAModelAllDocGen(torch.nn.Module):
-    def __init__(self, opt):
-        super().__init__()
-
-        self.opt = opt
-
-        self.num_heads = 16
-        self.embed_dim = 1024 #768
-
-        self.num_heads = 16
-        self.embed_dim = 1024 #768
-        self.opt = opt
-
-        self.self_attention = MultiheadAttention(embed_dim=self.embed_dim, num_heads=self.num_heads, dropout=0.0, batch_first=True).cuda()
-        self.post_attention_layer = Linear(self.embed_dim, self.embed_dim, bias=False).cuda()
-        self.pred_layer = Linear(self.embed_dim, 1, bias=False).cuda()
-
-        # added for softmax
-        self.soft_max_preds = Linear(self.embed_dim, 1, bias=False).cuda()        
-    
-    def forward(self, encoder_last_hidden_state, gen_tokens_embeddings):
-
-#        print(encoder_last_hidden_state.shape, gen_tokens_embeddings.shape)
-
-        att_input = encoder_last_hidden_state.view(encoder_last_hidden_state.size(0) * self.opt.n_context , 512, 1024) # 768
-        gen_tokens_embeddings = torch.repeat_interleave(gen_tokens_embeddings, repeats=self.opt.n_context, dim=0)
-        gen_tokens_embeddings = gen_tokens_embeddings[:, -1, :].unsqueeze(dim=1)
-#        print(gen_tokens_embeddings.shape, att_input.shape)
-        fnn_input, _ = self.self_attention(gen_tokens_embeddings, att_input, att_input, need_weights=False)
-        fnn_input = self.post_attention_layer(fnn_input)
-        # average over output tokens
-        fnn_input = torch.mean(fnn_input, dim=1, keepdim=False)
-
-        # performance prediction
-        logit = self.pred_layer(fnn_input)
-        prediction_passages = torch.sigmoid(logit).squeeze()        
-        # reshape to batch_size, n_context
-        prediction_passages = prediction_passages.view(-1, self.opt.n_context)
-
-        # sum over n_context
-#        prediction = torch.sum(prediction, dim=1)
-
-        # softmax prediction
-        soft_logit = self.soft_max_preds(fnn_input)
-        soft_logit = soft_logit.view(-1, self.opt.n_context)
-        soft_max_prediction = torch.softmax(soft_logit, dim=1)
-
-        prediction = torch.sum(prediction_passages * soft_max_prediction, dim=1)
-
-        return prediction, prediction_passages, soft_max_prediction
-
-class LCAModelAllDocGenSimplified(torch.nn.Module):
-    def __init__(self, opt):
-        super().__init__()
-
-        self.opt = opt
-
-        self.num_heads = 12
-        self.embed_dim = 768
-
-        self.num_heads = 12
-        self.embed_dim = 768
-        self.opt = opt
-
-        self.post_attention_layer = Linear(2 * self.embed_dim, 2 * self.embed_dim, bias=False).cuda()
-        self.pred_layer = Linear(2 * self.embed_dim, 1, bias=False).cuda()
-
-        # added for softmax
-        self.soft_max_preds = Linear(2 * self.embed_dim, 1, bias=False).cuda()        
-    
-    def forward(self, encoder_last_hidden_state, gen_tokens_embeddings):
-
-        att_input = encoder_last_hidden_state.view(encoder_last_hidden_state.size(0) * self.opt.n_context , 512, 768)
-        gen_tokens_embeddings = torch.repeat_interleave(gen_tokens_embeddings, repeats=self.opt.n_context, dim=0)
-
-        # use only the last token of the generated_token_embeddings
-        gen_tokens_embeddings = gen_tokens_embeddings[:, -1, :]
-
-        # mean of the tokens in the passage
-        att_input = torch.mean(att_input, dim=1, keepdim=False)
-
-        # concatenate the two embeddings
-        gen_passage_tokens_embeddings = torch.cat((gen_tokens_embeddings, att_input), dim=1)
-
-        fnn_input = self.post_attention_layer(gen_passage_tokens_embeddings)
-
-        # performance prediction
-        logit = self.pred_layer(fnn_input)
-        prediction_passages = torch.sigmoid(logit).squeeze()        
-        # reshape to batch_size, n_context
-        prediction_passages = prediction_passages.view(-1, self.opt.n_context)
-
-        # sum over n_context
-#        prediction = torch.sum(prediction, dim=1)
-
-        # softmax prediction
-        soft_logit = self.soft_max_preds(fnn_input)
-        soft_logit = soft_logit.view(-1, self.opt.n_context)
-        soft_max_prediction = torch.softmax(soft_logit, dim=1)
-
-        prediction = torch.sum(prediction_passages * soft_max_prediction, dim=1)
-
-        return prediction, prediction_passages, soft_max_prediction
-    
-
-class LCAModelAllDocGenOnlySoftMax(torch.nn.Module):
-    def __init__(self, opt):
-        super().__init__()
-
-        self.opt = opt
-
-        self.num_heads = 12
-        self.embed_dim = 768
-
-        self.num_heads = 12
-        self.embed_dim = 768
-        self.opt = opt
-
-        self.self_attention = MultiheadAttention(embed_dim=self.embed_dim, num_heads=self.num_heads, dropout=0.0, batch_first=True).cuda()
-        self.post_attention_layer = Linear(self.embed_dim, self.embed_dim, bias=False).cuda()
-
-        # added for softmax
-        self.soft_max_preds = Linear(self.embed_dim, 1, bias=False).cuda()        
-    
-    def forward(self, encoder_last_hidden_state, gen_tokens_embeddings):
-
-        att_input = encoder_last_hidden_state.view(encoder_last_hidden_state.size(0) * self.opt.n_context , 512, 768)
-        gen_tokens_embeddings = torch.repeat_interleave(gen_tokens_embeddings, repeats=self.opt.n_context, dim=0)
-        fnn_input, _ = self.self_attention(gen_tokens_embeddings, att_input, att_input, need_weights=False)
-        fnn_input = self.post_attention_layer(fnn_input)
-        # average over output tokens
-        fnn_input = torch.mean(fnn_input, dim=1, keepdim=False)
-
-        # softmax prediction
-        soft_logit = self.soft_max_preds(fnn_input)
-        soft_logit = soft_logit.view(-1, self.opt.n_context)
-#        soft_max_prediction = torch.softmax(soft_logit, dim=1)
-        soft_max_prediction = soft_logit/torch.sum(soft_logit, dim=1)
-
-        return soft_max_prediction
-    
-
-class LCAModelAllDocGenSum(torch.nn.Module):
-    def __init__(self, opt):
-        super().__init__()
-
-        self.opt = opt
-
-        self.num_heads = 12
-        self.embed_dim = 768
-
-        self.num_heads = 12
-        self.embed_dim = 768
-        self.opt = opt
-
-        self.self_attention = MultiheadAttention(embed_dim=self.embed_dim, num_heads=self.num_heads, dropout=0.0, batch_first=True).cuda()
-        self.post_attention_layer = Linear(self.embed_dim, self.embed_dim, bias=False).cuda()
-        self.pred_layer = Linear(self.embed_dim, 1, bias=False).cuda()
-    
-    def forward(self, encoder_last_hidden_state, gen_tokens_embeddings):
-
-        # b, number_of_passages, 512, 768
-        # b, 16, 768
-        att_input = encoder_last_hidden_state.view(encoder_last_hidden_state.size(0) * self.opt.n_context , 512, 768)
-        # b * number_of_passages, 512, 768
-
-        gen_tokens_embeddings = torch.repeat_interleave(gen_tokens_embeddings, repeats=self.opt.n_context, dim=0)
-
-        fnn_input, _ = self.self_attention(gen_tokens_embeddings, att_input, att_input, need_weights=False)
-        fnn_input = self.post_attention_layer(fnn_input)
-        # average over output tokens
-        fnn_input = torch.mean(fnn_input, dim=1, keepdim=False)
-
-        # performance prediction
-        logit = self.pred_layer(fnn_input)
-        prediction = torch.sigmoid(logit).squeeze()        
-        # reshape to batch_size, n_context
-        prediction_passages = prediction.view(-1, self.opt.n_context)
-
-        # sum over n_context
-        prediction = torch.sum(prediction_passages, dim=1)
-
-        return prediction, prediction_passages
 
 class LCABaselinePerfFunction(torch.nn.Module):
     def __init__(self, opt):
@@ -298,6 +114,90 @@ class LCABaselinePerfFunction(torch.nn.Module):
 
         return prediction
 
+class LCAModelAllDocGen(torch.nn.Module):
+    def __init__(self, opt):
+        super().__init__()
+
+        self.opt = opt
+
+        self.num_heads = 12
+        self.embed_dim = 768
+
+        self.num_heads = 12
+        self.embed_dim = 768
+        self.opt = opt
+
+        self.self_attention = MultiheadAttention(embed_dim=self.embed_dim, num_heads=self.num_heads, dropout=0.0, batch_first=True).cuda()
+        self.post_attention_layer = Linear(self.embed_dim, self.embed_dim, bias=False).cuda()
+        self.pred_layer = Linear(self.embed_dim, 1, bias=False).cuda()
+
+        # added for softmax
+        self.soft_max_preds = Linear(self.embed_dim, 1, bias=False).cuda()        
+    
+    def forward(self, encoder_last_hidden_state, gen_tokens_embeddings):
+
+        att_input = encoder_last_hidden_state.view(encoder_last_hidden_state.size(0) * self.opt.n_context , 512, 768)
+        gen_tokens_embeddings = torch.repeat_interleave(gen_tokens_embeddings, repeats=self.opt.n_context, dim=0)
+        fnn_input, _ = self.self_attention(gen_tokens_embeddings, att_input, att_input, need_weights=False)
+        fnn_input = self.post_attention_layer(fnn_input)
+        # average over output tokens
+        fnn_input = torch.mean(fnn_input, dim=1, keepdim=False)
+
+        # performance prediction
+        logit = self.pred_layer(fnn_input)
+        prediction_passages = torch.sigmoid(logit).squeeze()        
+        # reshape to batch_size, n_context
+        prediction_passages = prediction_passages.view(-1, self.opt.n_context)
+
+        # sum over n_context
+#        prediction = torch.sum(prediction, dim=1)
+
+        # softmax prediction
+        soft_logit = self.soft_max_preds(fnn_input)
+        soft_logit = soft_logit.view(-1, self.opt.n_context)
+        soft_max_prediction = torch.softmax(soft_logit, dim=1)
+
+        prediction = torch.sum(prediction_passages * soft_max_prediction, dim=1)
+
+        return prediction, prediction_passages, soft_max_prediction
+    
+
+class LCAModelAllDocGenSum(torch.nn.Module):
+    def __init__(self, opt):
+        super().__init__()
+
+        self.opt = opt
+
+        self.num_heads = 12
+        self.embed_dim = 768
+
+        self.num_heads = 12
+        self.embed_dim = 768
+        self.opt = opt
+
+        self.self_attention = MultiheadAttention(embed_dim=self.embed_dim, num_heads=self.num_heads, dropout=0.0, batch_first=True).cuda()
+        self.post_attention_layer = Linear(self.embed_dim, self.embed_dim, bias=False).cuda()
+        self.pred_layer = Linear(self.embed_dim, 1, bias=False).cuda()
+    
+    def forward(self, encoder_last_hidden_state, gen_tokens_embeddings):
+
+        att_input = encoder_last_hidden_state.view(encoder_last_hidden_state.size(0) * self.opt.n_context , 512, 768)
+        gen_tokens_embeddings = torch.repeat_interleave(gen_tokens_embeddings, repeats=self.opt.n_context, dim=0)
+        fnn_input, _ = self.self_attention(gen_tokens_embeddings, att_input, att_input, need_weights=False)
+        fnn_input = self.post_attention_layer(fnn_input)
+        # average over output tokens
+        fnn_input = torch.mean(fnn_input, dim=1, keepdim=False)
+
+        # performance prediction
+        logit = self.pred_layer(fnn_input)
+        prediction = torch.sigmoid(logit).squeeze()        
+        # reshape to batch_size, n_context
+        prediction_passages = prediction.view(-1, self.opt.n_context)
+
+        # sum over n_context
+        prediction = torch.sum(prediction_passages, dim=1)
+
+        return prediction, prediction_passages
 
 class LCAModelDocGen(torch.nn.Module):
     def __init__(self, opt):
@@ -425,7 +325,7 @@ def set_parser_options(parser: argparse.Namespace, passed_args: List[str]) -> ar
 def _get_eval_data_iterator(opt, data_path, task):
     data_iterator = task.data_iterator(data_path, opt.global_rank, opt.world_size, opt=opt, is_eval=True)
     data_iterator = filter(None, map(task.process, data_iterator))
-    data_iterator = list(task.batch_iterator(data_iterator, opt.per_gpu_batch_size_eval))
+    data_iterator = list(task.batch_iterator(data_iterator, opt.per_gpu_batch_size))
 
     if dist.is_initialized():
         len_data = torch.tensor(len(data_iterator), device=torch.device("cuda"))
@@ -454,6 +354,7 @@ def evaluate(model, atlas_model, opt, data_path, step=None):
         scores = batch.get("scores")
         generations = batch.get("generation")
 
+
         f1_label = []
         for score_dict in scores:
             f1_label.append(score_dict["f1"])
@@ -462,6 +363,7 @@ def evaluate(model, atlas_model, opt, data_path, step=None):
 
         query_enc, labels, decoder_input_ids = unwrapped_model.tokenize(query, answers, target_tokens=target_tokens)
         # generated_tokens["input_ids"] shape: batch_size, max_length
+
         generated_tokens = unwrapped_model.reader_tokenizer(
                                                             generations,
                                                             max_length=opt.target_maxlength,
@@ -485,7 +387,6 @@ def evaluate(model, atlas_model, opt, data_path, step=None):
         cfg.n_context = min(opt.n_context, reader_tokens["input_ids"].size(1))
 
         with torch.no_grad():
-            # what is happening here? decoder input ids, what are these? 
             output = unwrapped_model.reader(
                 input_ids=reader_tokens["input_ids"].cuda().view(reader_tokens["input_ids"].size(0), -1),
                 attention_mask=reader_tokens["attention_mask"].cuda().view(reader_tokens["attention_mask"].size(0), -1),
@@ -496,10 +397,6 @@ def evaluate(model, atlas_model, opt, data_path, step=None):
             
             # encoder_last_hidden_state size: batch_size, num_passages * 512, 768
             encoder_last_hidden_state = output["encoder_last_hidden_state"]        
-            decoder_hidden_state = output["decoder_hidden_states"][-1 * opt.decoder_features_layer]
-            
-        if opt.decoder_features_layer != 0:
-            gen_tokens_embeddings = decoder_hidden_state            
 
         if opt.lca_one_document:
             prediction = model(encoder_last_hidden_state)
@@ -509,17 +406,12 @@ def evaluate(model, atlas_model, opt, data_path, step=None):
             prediction, prediction_passages = model(encoder_last_hidden_state, gen_tokens_embeddings) 
         elif opt.lca_multiple_document_generation_softmax:
             prediction, prediction_passages, softmax_passages = model(encoder_last_hidden_state, gen_tokens_embeddings)           
-        elif opt.lca_multiple_document_generation_softmax_only:
-            prediction = model(encoder_last_hidden_state, gen_tokens_embeddings)
-        elif opt.lca_multiple_document_generation_simplified:
-            prediction, prediction_passages, softmax_passages = model(encoder_last_hidden_state, gen_tokens_embeddings)
         elif opt.lca_baseline_perf_function:
             prediction = model(encoder_last_hidden_state, gen_tokens_embeddings)
-
         else:
             raise NotImplementedError
         
-        if f1_labels.size()[0] < opt.per_gpu_batch_size_eval or prediction.size()[0] < opt.per_gpu_batch_size_eval:
+        if f1_labels.size()[0] < opt.per_gpu_batch_size or prediction.size()[0] < opt.per_gpu_batch_size:
             continue
 
         eval_loss = torch.nn.functional.mse_loss(prediction.unsqueeze(dim=1), f1_labels.unsqueeze(dim=1))
@@ -527,10 +419,10 @@ def evaluate(model, atlas_model, opt, data_path, step=None):
         metrics["eval_loss"].append(eval_loss.cpu())
 
         prediction = prediction.unsqueeze(dim=1).cpu().numpy().tolist()
-        if opt.lca_multiple_document_generation or opt.lca_multiple_document_generation_softmax or opt.lca_multiple_document_generation_simplified:
+        if opt.lca_multiple_document_generation or opt.lca_multiple_document_generation_softmax:
             prediction_passages = prediction_passages.cpu().numpy().tolist()
-            if opt.lca_multiple_document_generation_softmax or opt.lca_multiple_document_generation_simplified:
-                softmax_passages = softmax_passages.cpu().numpy().tolist()
+            if opt.lca_multiple_document_generation_softmax:
+                softmax_passages = softmax_passages.cpu().numpy().tolist()        
 #        print(prediction.shape, f1_labels.unsqueeze(dim=1).shape, len(generations))
 
         for k in range(len(generations)):
@@ -541,24 +433,16 @@ def evaluate(model, atlas_model, opt, data_path, step=None):
                 ex["passages"] = retrieved_passages[k]
             if "id" in batch:
                 ex["id"] = batch["id"][k]
-            if opt.lca_multiple_document_generation or opt.lca_multiple_document_generation_softmax or opt.lca_multiple_document_generation_simplified:
+            if opt.lca_multiple_document_generation or opt.lca_multiple_document_generation_softmax:
                 ex["f1_pred_passages"] = prediction_passages[k]
-            if opt.lca_multiple_document_generation_softmax or opt.lca_multiple_document_generation_simplified:
+            if opt.lca_multiple_document_generation_softmax:
                 ex["softmax_passages"] = softmax_passages[k]
-            
+
             dataset_wpred.append(ex)
-
-    all_em_scores = [dataset_wpred[i]["scores"]["exact_match"] for i in range(len(dataset_wpred))]    
-    all_f1_preds = [0 if dataset_wpred[i]["f1_pred"][0] < 0.5 else 1 for i in range(len(dataset_wpred))]
-
-    # compute confusion matrix between f1_pred
-    cm = confusion_matrix(all_em_scores, all_f1_preds)
-    accuracy = np.trace(cm) / np.sum(cm)
 
     metrics, dataset_wpred = task.evaluation_postprocessing(metrics, dataset_wpred)
     metrics = util.avg_dist_dict(task.metrics, metrics)
     metrics = {key: value if key == "eval_loss" else 100 * value for key, value in metrics.items()}
-    metrics["accuracy"] = accuracy
     if opt.write_results:
         dataset_name, _ = os.path.splitext(os.path.basename(data_path))
         dataset_name = f"{dataset_name}-step-{step}"
@@ -566,191 +450,6 @@ def evaluate(model, atlas_model, opt, data_path, step=None):
 
     return metrics
 
-def train(
-    model,
-    atlas_model,
-    optimizer,
-    scheduler,
-    step,
-    opt,
-    checkpoint_path,
-):
-    atlas_model.eval()
-    tb_logger = util.init_tb_logger(os.path.join(opt.checkpoint_dir, opt.name), is_main=opt.is_main)
-    run_stats = util.WeightedAvgStats()
-
-    # different seed for different sampling depending on global_rank
-    torch.manual_seed(opt.global_rank + opt.seed)
-
-    scale = 2.0
-    grad_stats = defaultdict(lambda: [])
-    unwrapped_model = util.get_unwrapped_model_if_wrapped(atlas_model)
-    task = get_task(opt, unwrapped_model.reader_tokenizer)
-
-    while step < opt.total_steps:
-        data_iterator = task.data_iterator(
-            opt.train_data, opt.global_rank, opt.world_size, repeat_if_less_than_world_size=True, opt=opt
-        )
-        data_iterator = filter(None, map(task.process, data_iterator))
-        data_iterator = task.batch_iterator(data_iterator, opt.per_gpu_batch_size, drop_last=True, shuffle=opt.shuffle)
-        for i, batch in enumerate(data_iterator):
-
-            iter_stats = {}
-            model.train()
-            step += 1
-            train_step_start = time.time()
-
-            query = batch.get("query", [""])
-            answers = batch.get("target", [""])
-            target_tokens = batch.get("target_tokens")
-            scores = batch.get("scores")
-            generations = batch.get("generation")
-
-            f1_label = []
-            for score_dict in scores:
-                f1_label.append(score_dict["f1"])
-
-            f1_labels = torch.tensor(f1_label, dtype=torch.float32).cuda()
-
-            query_enc, labels, decoder_input_ids = unwrapped_model.tokenize(query, answers, target_tokens=target_tokens)
-            # generated_tokens["input_ids"] shape: batch_size, max_length
-            if opt.lca_one_document_generation or opt.lca_multiple_document_generation or opt.lca_multiple_document_generation_softmax or opt.lca_multiple_document_generation_softmax_only or opt.lca_multiple_document_generation_simplified:
-                generated_tokens = unwrapped_model.reader_tokenizer(
-                                                                    generations,
-                                                                    max_length=opt.target_maxlength,
-                                                                    padding="max_length",
-                                                                    truncation=True,
-                                                                    return_tensors="pt",
-                                                                    add_special_tokens=False,
-                                                                )
-                generated_tokens = generated_tokens["input_ids"].cuda()
-                with torch.no_grad():
-                    gen_tokens_embeddings = unwrapped_model.reader.shared(generated_tokens)
-
-            retrieved_passages = [p[: opt.n_context] for p in batch["passages"]]
-
-            reader_tokens, _ = unwrapped_model.tokenize_passages(query, retrieved_passages)
-            # reader_tokens: input_ids, attention_mask (batch_size, some_number, 512)
-            # some_number = the max number of passages retrieved for any example in the batch
-
-            cfg = unwrapped_model.reader.encoder.config
-            cfg.bsz = reader_tokens["input_ids"].size(0)
-            cfg.n_context = min(opt.n_context, reader_tokens["input_ids"].size(1))
-
-            with torch.no_grad():
-                output = unwrapped_model.reader(
-                    input_ids=reader_tokens["input_ids"].cuda().view(reader_tokens["input_ids"].size(0), -1),
-                    attention_mask=reader_tokens["attention_mask"].cuda().view(reader_tokens["attention_mask"].size(0), -1),
-                    decoder_input_ids=decoder_input_ids.cuda(),
-                    use_cache=False,
-                    output_hidden_states = True
-                    )
-                
-                # encoder_last_hidden_state size: batch_size, num_passages * 512, 768
-                encoder_last_hidden_state = output["encoder_last_hidden_state"]
-
-                decoder_hidden_state = output["decoder_hidden_states"][-1 * opt.decoder_features_layer]
-            if opt.decoder_features_layer != 0:
-                gen_tokens_embeddings = decoder_hidden_state
-
-            if opt.lca_one_document:
-                prediction = model(encoder_last_hidden_state)
-            elif opt.lca_one_document_generation:
-                prediction = model(encoder_last_hidden_state, gen_tokens_embeddings)
-            elif opt.lca_multiple_document_generation:            
-                prediction, _ = model(encoder_last_hidden_state, gen_tokens_embeddings)
-            elif opt.lca_multiple_document_generation_softmax:
-                prediction, _, _ = model(encoder_last_hidden_state, gen_tokens_embeddings)     
-            elif opt.lca_multiple_document_generation_softmax_only:
-                prediction = model(encoder_last_hidden_state, gen_tokens_embeddings)
-            elif opt.lca_multiple_document_generation_simplified:
-                prediction, _, _ = model(encoder_last_hidden_state, gen_tokens_embeddings)     
-            elif opt.lca_baseline_perf_function:
-                prediction = model(encoder_last_hidden_state, gen_tokens_embeddings)
-            else:
-                raise NotImplementedError
-            train_loss = torch.nn.functional.mse_loss(prediction, f1_labels)
-
-            iter_stats["loss/train_loss"] = (train_loss.item(), len(batch["query"]))
-
-            backward_start = time.time()
-            train_loss = scale * train_loss
-            train_loss.backward()
-            iter_stats["runtime/backward"] = (time.time() - backward_start, 1)
-
-            model_update_start = time.time()
-
-            stats = util.compute_grad_stats_finetune_head(model)
-            if stats["skip_example"]:
-                model.module.zero_grad()
-                # continue
-            else:
-                for k, v in stats.items():
-                    grad_stats[k].append(v)
-
-            if len(grad_stats["max"]) >= THRESHOLD_GRAD_STATS:
-                if np.mean(grad_stats["max"]) > GRAD_SCALE_UPPER_BOUND_MEAN:
-                    scale /= 2
-                elif np.mean(grad_stats["mean"]) < GRAD_SCALE_LOWER_BOUND_MEAN:
-                    scale *= 2
-                # print(f'Scale: {scale}')
-                grad_stats.clear()
-
-            if step % opt.accumulation_steps == 0 and not stats["skip_example"]:
-                if opt.is_distributed and opt.shard_optim:
-                    optimizer.clip_grad_norm(scale * opt.clip)
-                else:
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), scale * opt.clip)
-
-                optimizer.step(scale=scale)
-                scheduler.step()
-                model.module.zero_grad()
-            iter_stats["runtime/model_update"] = (time.time() - model_update_start, 1)
-            iter_stats["runtime/train_step"] = (time.time() - train_step_start, 1)
-            run_stats.update(iter_stats)
-
-            if step % opt.log_freq == 0:
-                log = f"{step} / {opt.total_steps}"
-                for k, v in sorted(run_stats.average_stats.items()):
-                    log += f" | {k}: {v:.3g}"
-                    if tb_logger:
-                        tb_logger.add_scalar(k, v, step)
-                log += f" | lr: {scheduler.get_last_lr()[0]:0.2g}"
-                log += f" | Memory: {torch.cuda.max_memory_allocated()//1e9} GiB"
-                if tb_logger:
-                    tb_logger.add_scalar("lr", scheduler.get_last_lr()[0], step)
-
-                logger.info(log)
-                run_stats.reset()
-
-            if step % opt.eval_freq == 0:
-                for data_path in opt.eval_data:
-                    dataset_name = os.path.basename(data_path)
-
-                    metrics = evaluate(model, atlas_model, opt, data_path, step)
-                    log_message = f"Dataset: {dataset_name}"
-                    for k, v in metrics.items():
-                        log_message += f" | {v:.3f} {k}"
-                        if tb_logger:
-                            tb_logger.add_scalar(f"{dataset_name}/{k}", v, step)
-                    logger.info(log_message)
-
-            if step % opt.save_freq == 0:
-                checkpoint = {
-                    "step": step,
-                    "model": model.module.state_dict(),
-                    "optimizer": optimizer.state_dict(),
-                    "scheduler": scheduler.state_dict(),
-                    "opt": opt,
-                }
-                name = f"step-{step}" + "model.pth.tar"
-                path = os.path.join(checkpoint_path)
-#                epoch_path = os.path.join(path, name)  # "step-%s" % step)
-                fp = os.path.join(path, name)
-                torch.save(checkpoint, fp)
-
-            if step > opt.total_steps:
-                exit()
 
 
 if __name__ == "__main__":
@@ -780,17 +479,16 @@ if __name__ == "__main__":
         model = LCAModelAllDocGenSum(opt)
     elif opt.lca_multiple_document_generation_softmax:
         model = LCAModelAllDocGen(opt)
-    elif opt.lca_multiple_document_generation_softmax_only:
-        model = LCAModelAllDocGenOnlySoftMax(opt)
-    elif opt.lca_multiple_document_generation_simplified:
-        model = LCAModelAllDocGenSimplified(opt)
     elif opt.lca_baseline_perf_function:
-        model = LCABaselinePerfFunction(opt)
+        model = LCABaselinePerfFunction(opt)        
     else:
         raise NotImplementedError
-    
+
     optimizer, scheduler, _, _ = set_optim(opt, model)
 
+    checkpoint = torch.load("/data/projects/monet/atlas/experiments/base_t5_model_lm_TRUE_baseline_perf_function_20231129-211522/step-1250model.pth.tar")
+    model.load_state_dict(checkpoint["model"])
+    step = checkpoint["step"]
     if opt.is_distributed:
         atlas_model = torch.nn.parallel.DistributedDataParallel(
             atlas_model,
@@ -810,12 +508,14 @@ if __name__ == "__main__":
 
     logger.info("Start finetuning")
     dist_utils.barrier()
-    train(
-        model,
-        atlas_model,
-        optimizer,
-        scheduler,
-        step,
-        opt,
-        checkpoint_path,
-    )
+
+    for data_path in opt.eval_data:
+        dataset_name = os.path.basename(data_path)
+        logger.info(f"Start Evaluation on {data_path}")
+
+        metrics = evaluate(model, atlas_model, opt, data_path, step)
+        log_message = f"Dataset: {dataset_name}"
+        for k, v in metrics.items():
+            log_message += f" | {v:.3f} {k}"
+        logger.info(log_message)    
+

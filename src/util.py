@@ -343,3 +343,12 @@ def get_unwrapped_model_if_wrapped(model):
     if hasattr(model, "module"):
         return model.module
     return model
+
+
+# combine a list of jsonl files into a single file
+def combine_jsonl_files(files, output_file):
+    with open(output_file, "w") as fout:
+        for file in files:
+            with open(file, "r") as fin:
+                for line in fin:
+                    fout.write(line)

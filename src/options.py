@@ -400,6 +400,53 @@ class Options:
             action="store_true",
             help="Only use all passages and not other combinations of passages",
         )
+        self.parser.add_argument(
+            "--lca_one_document",
+            action="store_true",
+            help="Uses only query and document to predict performance.",
+        )
+        self.parser.add_argument(
+            "--lca_one_document_generation",
+            action="store_true",
+            help="Uses query, single document and the generation to predict performance.",
+        )
+        self.parser.add_argument(
+            "--lca_multiple_document_generation",
+            action="store_true",
+            help="Uses query, multiple documents, and the generation to predict performance.",
+        )
+        self.parser.add_argument(
+            "--lca_multiple_document_generation_softmax",
+            action="store_true",
+            help="Uses query, multiple documents, and the generation to predict performance.",
+        )
+        self.parser.add_argument(
+            "--lca_multiple_document_generation_softmax_only",
+            action="store_true",
+            help="Uses query, multiple documents, and the generation to predict performance.",
+        )
+        self.parser.add_argument(
+            "--lca_multiple_document_generation_simplified",
+            action="store_true",
+            help="Uses query, multiple documents, and the generation to predict performance.",
+        )        
+        self.parser.add_argument(
+            "--lca_baseline_perf_function",
+            action="store_true",
+            help="Uses query, multiple documents, and the generation to predict performance.",
+        )                
+        self.parser.add_argument(
+            "--per_gpu_batch_size_eval",
+            default=1,
+            type=int,
+            help="Batch size per GPU/CPU for training.",
+        )
+        self.parser.add_argument(
+            "--decoder_features_layer",
+            default=0,
+            type=int,
+            help="Decoder layer to extract features from.",
+        )        
 
     def add_index_options(self):
         self.parser.add_argument(

@@ -274,6 +274,8 @@ if __name__ == "__main__":
     credit_file_loo = "/data/projects/monet/atlas/experiments/base_t5_model_lm_TRUE_leave_one_out/nq_test-step-0_input_reduction.jsonl"
     credit_file_gradient = "/data/projects/monet/atlas/experiments/base_t5_model_lm_TRUE_gradient_credit/nq_test-step-0-step-0-eval.jsonl"
     credit_file_attention = "/data/projects/monet/atlas/experiments/base_t5_model_lm_TRUE_attention_credit/nq_test-step-0-step-0-eval.jsonl"
+    credit_file_lca_multi_doc = "/data/projects/monet/atlas/experiments/base_t5_model_lm_TRUE_lca_multiple_document_generation_sum_eval/nq_test-step-0-step-0-eval-step-1100.jsonl"
+    credit_file_lca_multi_doc_soft = "/data/projects/monet/atlas/experiments/base_t5_model_lm_TRUE_lca_multiple_document_generation_softmax_eval/nq_test-step-0-step-0-eval-step-1000.jsonl"
 
     with open(credit_file_loo, "r") as f:
         data_loo = f.readlines()
@@ -287,8 +289,18 @@ if __name__ == "__main__":
     
     with open(credit_file_attention, "r") as f:
         data_attention = f.readlines()
-    
+        
     data_attention = [json.loads(line) for line in data_attention]
+
+    with open(credit_file_lca_multi_doc, "r") as f:
+        data_lca_multi_doc = f.readlines()
+    
+    data_lca_multi_doc = [json.loads(line) for line in data_lca_multi_doc]
+
+    with open(credit_file_lca_multi_doc_soft, "r") as f:
+        data_lca_multi_doc_soft = f.readlines()
+    
+    data_lca_multi_doc_soft = [json.loads(line) for line in data_lca_multi_doc_soft]
 
     all_em_scores_sum_k = [[] for i in range(1, len(data_loo[0]['scores']))]
     all_f1_scores_sum_k = [[] for i in range(1, len(data_loo[0]['scores']))]
@@ -309,7 +321,16 @@ if __name__ == "__main__":
         gradient_dict[data_attention[i]['query']] = []
         for j in range(1, len(data_attention[i]['scores'])):
             gradient_dict[data_attention[i]['query']] = data_attention[i]['attention_credit']
-
+    
+    lca_dict = {}
+    for i in range(len(data_lca_multi_doc)):
+        lca_dict[data_lca_multi_doc[i]['query']] = data_lca_multi_doc[i]['f1_pred_passages']
+    
+    lca_dict_soft = {}
+    for i in range(len(data_lca_multi_doc_soft)):
+        lca_dict_soft[data_lca_multi_doc_soft[i]['query']] = []
+        for j in range(len(data_lca_multi_doc_soft[i]['f1_pred_passages'])):
+            lca_dict_soft[data_lca_multi_doc_soft[i]['query']].append(data_lca_multi_doc_soft[i]['f1_pred_passages'][j] * data_lca_multi_doc_soft[i]['softmax_passages'][j])
 
     doc = 0
     all_loo_numbers_0 = []
@@ -359,7 +380,98 @@ if __name__ == "__main__":
     print("Correlation between loo and gradient for index 4:", pearsonr(all_loo_numbers_4, all_gradient_numbers_4))
 
 
+    doc = 0
+    all_loo_numbers_0 = []
+    all_gradient_numbers_0 = []
     
+    all_loo_numbers_1 = []
+    all_gradient_numbers_1 = []
+
+    all_loo_numbers_2 = []
+    all_gradient_numbers_2 = []
+
+    all_loo_numbers_3 = []
+    all_gradient_numbers_3 = []
+
+    all_loo_numbers_4 = []
+    all_gradient_numbers_4 = []
+
+    all_loo_numbers_5 = []
+    all_gradient_numbers_5 = []
+
+    for key in lca_dict.keys():
+
+        all_loo_numbers_0.append(loo_dict[key][0])
+        all_gradient_numbers_0.append(lca_dict[key][0])
+
+        all_loo_numbers_1.append(loo_dict[key][1])
+        all_gradient_numbers_1.append(lca_dict[key][1])
+
+        all_loo_numbers_2.append(loo_dict[key][2])
+        all_gradient_numbers_2.append(lca_dict[key][2])
+
+        all_loo_numbers_3.append(loo_dict[key][3])
+        all_gradient_numbers_3.append(lca_dict[key][3])
+
+        all_loo_numbers_4.append(loo_dict[key][4])
+        all_gradient_numbers_4.append(lca_dict[key][4])
+
+
+    # correlation between two list
+    from scipy.stats import pearsonr
+    print("Correlation between loo and lca multidoc for index 0:", pearsonr(all_loo_numbers_0, all_gradient_numbers_0))
+    print("Correlation between loo and lca multidoc for index 1:", pearsonr(all_loo_numbers_1, all_gradient_numbers_1))
+    print("Correlation between loo and lca multidoc for index 2:", pearsonr(all_loo_numbers_2, all_gradient_numbers_2))
+    print("Correlation between loo and lca multidoc for index 3:", pearsonr(all_loo_numbers_3, all_gradient_numbers_3))
+    print("Correlation between loo and lca multidoc for index 4:", pearsonr(all_loo_numbers_4, all_gradient_numbers_4))
+
+
+    
+    doc = 0 
+    all_loo_numbers_0 = []
+    all_gradient_numbers_0 = []
+
+    all_loo_numbers_1 = []
+    all_gradient_numbers_1 = []
+
+    all_loo_numbers_2 = []
+    all_gradient_numbers_2 = []
+
+    all_loo_numbers_3 = []
+    all_gradient_numbers_3 = []
+
+    all_loo_numbers_4 = []
+    all_gradient_numbers_4 = []
+
+    all_loo_numbers_5 = []
+    all_gradient_numbers_5 = []
+
+    for key in lca_dict_soft.keys():
+
+        all_loo_numbers_0.append(loo_dict[key][0])
+        all_gradient_numbers_0.append(lca_dict_soft[key][0])
+
+        all_loo_numbers_1.append(loo_dict[key][1])
+        all_gradient_numbers_1.append(lca_dict_soft[key][1])
+
+        all_loo_numbers_2.append(loo_dict[key][2])
+        all_gradient_numbers_2.append(lca_dict_soft[key][2])
+
+        all_loo_numbers_3.append(loo_dict[key][3])
+        all_gradient_numbers_3.append(lca_dict_soft[key][3])
+
+        all_loo_numbers_4.append(loo_dict[key][4])
+        all_gradient_numbers_4.append(lca_dict_soft[key][4])
+
+
+    # correlation between two list
+    from scipy.stats import pearsonr
+    print("Correlation between loo and lca multidoc softmax for index 0:", pearsonr(all_loo_numbers_0, all_gradient_numbers_0))
+    print("Correlation between loo and lca multidoc softmax for index 1:", pearsonr(all_loo_numbers_1, all_gradient_numbers_1))
+    print("Correlation between loo and lca multidoc softmax for index 2:", pearsonr(all_loo_numbers_2, all_gradient_numbers_2))
+    print("Correlation between loo and lca multidoc softmax for index 3:", pearsonr(all_loo_numbers_3, all_gradient_numbers_3))
+    print("Correlation between loo and lca multidoc softmax for index 4:", pearsonr(all_loo_numbers_4, all_gradient_numbers_4))
+
 
 
     
